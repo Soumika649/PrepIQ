@@ -45,6 +45,53 @@ class PrepIQApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    def test_extract_skills_endpoint_returns_skill_list(self) -> None:
+        from backend.app import ml
+
+        ml._spacy_nlp = False
+        response = self.client.post(
+            "/api/ml/extract-skills",
+            json={"text": "Built Python and React applications with PostgreSQL."},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIsInstance(payload["skills"], list)
+        self.assertEqual(payload["count"], len(payload["skills"]))
+        self.assertIn("Python", payload["skills"])
+
+    def test_match_score_endpoint_returns_score_and_label(self) -> None:
+        response = self.client.post(
+            "/api/ml/match-score",
+            json={
+                "resumeText": "Python developer with FastAPI, SQL, and machine learning experience.",
+                "jdText": "Looking for a Python engineer with FastAPI and SQL skills.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIsInstance(payload["score"], int)
+        self.assertGreaterEqual(payload["score"], 0)
+        self.assertLessEqual(payload["score"], 100)
+        self.assertIn(payload["label"], {"Strong match", "Moderate match", "Weak match"})
+
+    def test_analyze_confidence_endpoint_returns_analysis_shape(self) -> None:
+        response = self.client.post(
+            "/api/ml/analyze-confidence",
+            json={
+                "text": "I led a team of 4 engineers and improved deployment speed by 30 percent.",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertIsInstance(payload["confidenceScore"], int)
+        self.assertIsInstance(payload["specificity"], int)
+        self.assertIsInstance(payload["wordCount"], int)
+        self.assertIn(payload["sentiment"], {"positive", "neutral", "negative"})
+        self.assertGreater(payload["wordCount"], 0)
+
     def test_signup_login_and_me(self) -> None:
         email = f"login-{uuid4().hex[:8]}@example.com"
         signup = self.client.post(
