@@ -26,7 +26,7 @@ jobs:
         run: npm run lint
 
       - name: Run frontend tests
-        run: npm test
+        run: npm test -- --reporter=verbose
 
       - name: Build frontend
         run: npm run build
