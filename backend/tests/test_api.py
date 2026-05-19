@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from uuid import uuid4
@@ -45,6 +46,41 @@ class PrepIQApiTestCase(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json(), {"status": "ok"})
 
+    def test_load_local_env_preserves_existing_environment(self) -> None:
+        from backend.app.main import load_local_env
+
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as env_file:
+            env_file.write("PREPIQ_TEST_ENV=from-file\n")
+            env_file.write("PREPIQ_EXISTING_ENV=from-file\n")
+            env_path = env_file.name
+
+        previous_env_file = os.environ.get("PREPIQ_ENV_FILE")
+        previous_new = os.environ.get("PREPIQ_TEST_ENV")
+        previous_existing = os.environ.get("PREPIQ_EXISTING_ENV")
+        try:
+            os.environ["PREPIQ_ENV_FILE"] = env_path
+            os.environ.pop("PREPIQ_TEST_ENV", None)
+            os.environ["PREPIQ_EXISTING_ENV"] = "already-set"
+
+            load_local_env()
+
+            self.assertEqual(os.environ["PREPIQ_TEST_ENV"], "from-file")
+            self.assertEqual(os.environ["PREPIQ_EXISTING_ENV"], "already-set")
+        finally:
+            if previous_env_file is None:
+                os.environ.pop("PREPIQ_ENV_FILE", None)
+            else:
+                os.environ["PREPIQ_ENV_FILE"] = previous_env_file
+            if previous_new is None:
+                os.environ.pop("PREPIQ_TEST_ENV", None)
+            else:
+                os.environ["PREPIQ_TEST_ENV"] = previous_new
+            if previous_existing is None:
+                os.environ.pop("PREPIQ_EXISTING_ENV", None)
+            else:
+                os.environ["PREPIQ_EXISTING_ENV"] = previous_existing
+            os.unlink(env_path)
+
     def test_extract_skills_endpoint_returns_skill_list(self) -> None:
         from backend.app import ml
 
@@ -59,6 +95,34 @@ class PrepIQApiTestCase(unittest.TestCase):
         self.assertIsInstance(payload["skills"], list)
         self.assertEqual(payload["count"], len(payload["skills"]))
         self.assertIn("Python", payload["skills"])
+    
+    def test_extract_skills_endpoint_returns_multiword_skills(self) -> None:
+        from backend.app import ml
+
+        ml._spacy_nlp = False
+
+        response = self.client.post(
+            "/api/ml/extract-skills",
+            json={
+                "text": """
+                Worked on machine-learning, spring_boot,
+                oauth/jwt auth, and google-cloud deployment
+                """
+            },
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+
+        payload = response.json()
+        skills = payload["skills"]
+
+        self.assertIn("Machine Learning", skills)
+        self.assertIn("Spring Boot", skills)
+        self.assertIn("Google Cloud", skills)
+
+        # Single-word skills should still work
+        self.assertIn("Oauth", skills)
+        self.assertIn("JWT", skills)
 
     def test_match_score_endpoint_returns_score_and_label(self) -> None:
         response = self.client.post(
@@ -114,6 +178,53 @@ class PrepIQApiTestCase(unittest.TestCase):
         tampered_token = f"{token[:-1]}{'a' if token[-1] != 'a' else 'b'}"
         tampered_me = self.client.get("/api/auth/me", headers={"Authorization": f"Bearer {tampered_token}"})
         self.assertEqual(tampered_me.status_code, 401, tampered_me.text)
+
+    def test_login_wrong_password_returns_401(self) -> None:
+        email = f"wrongpw-{uuid4().hex[:8]}@example.com"
+        self.client.post(
+            "/api/auth/signup",
+            json={"name": "Wrong PW User", "email": email, "password": "password123"},
+        )
+
+        response = self.client.post(
+            "/api/auth/login",
+            json={"email": email, "password": "wrongpassword"},
+        )
+
+        self.assertEqual(response.status_code, 401, response.text)
+        self.assertIn("Invalid credentials", response.json()["detail"])
+
+    def test_expired_token_returns_401(self) -> None:
+        from datetime import timedelta
+        from backend.app.main import encode_token, utc_now
+
+        user_id, _ = self.create_account()
+
+        expired_token = encode_token({
+            "sub": user_id,
+            "email": "expired@example.com",
+            "exp": int((utc_now() - timedelta(hours=1)).timestamp()),
+        })
+
+        response = self.client.get(
+            f"/api/users/{user_id}/sessions",
+            headers={"Authorization": f"Bearer {expired_token}"},
+        )
+
+        self.assertEqual(response.status_code, 401, response.text)
+        self.assertIn("Token expired", response.json()["detail"])
+
+    def test_cross_user_access_returns_403(self) -> None:
+        user_a_id, _ = self.create_account()
+        user_b_id, headers_b = self.create_account()
+
+        response = self.client.get(
+            f"/api/users/{user_a_id}/profile",
+            headers=headers_b,
+        )
+
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertIn("Forbidden", response.json()["detail"])
 
     def test_profile_session_mock_and_job_flow(self) -> None:
         user_id, headers = self.create_account()
@@ -177,6 +288,15 @@ class PrepIQApiTestCase(unittest.TestCase):
         self.assertEqual(mock.status_code, 201, mock.text)
         self.assertIn("oneLineVerdict", mock.json()["aiFeedback"])
 
+        mocks = self.client.get(f"/api/users/{user_id}/mocks", headers=headers)
+        self.assertEqual(mocks.status_code, 200, mocks.text)
+        mocks_payload = mocks.json()
+        self.assertEqual(mocks_payload["total"], 1)
+        self.assertEqual(mocks_payload["limit"], 20)
+        self.assertEqual(mocks_payload["offset"], 0)
+        self.assertEqual(len(mocks_payload["items"]), 1)
+        self.assertEqual(mocks_payload["items"][0]["sessionId"], session_payload["id"])
+
         job = self.client.post(
             f"/api/users/{user_id}/jobs",
             headers=headers,
@@ -214,6 +334,11 @@ class PrepIQApiTestCase(unittest.TestCase):
         sessions = self.client.get(f"/api/users/{user_id}/sessions", headers=headers)
         self.assertEqual(sessions.status_code, 200, sessions.text)
         self.assertEqual(sessions.json(), [])
+
+        mocks_after_delete = self.client.get(f"/api/users/{user_id}/mocks", headers=headers)
+        self.assertEqual(mocks_after_delete.status_code, 200, mocks_after_delete.text)
+        self.assertEqual(mocks_after_delete.json()["items"], [])
+        self.assertEqual(mocks_after_delete.json()["total"], 0)
 
 
 if __name__ == "__main__":

@@ -84,6 +84,7 @@ export function AppSidebar({ onLogout }: AppSidebarProps) {
                   <SidebarMenuButton
                     asChild
                     isActive={location.pathname === item.url}
+                    tooltip={item.title}
                   >
                     <NavLink
                       to={item.url}
@@ -91,6 +92,7 @@ export function AppSidebar({ onLogout }: AppSidebarProps) {
                       onClick={() => setOpenMobile(false)}
                       className="hover:bg-sidebar-accent/50 transition-colors"
                       activeClassName="bg-sidebar-accent text-sidebar-primary font-medium"
+                      aria-label={item.title}
                     >
                       <item.icon className="mr-2 h-4 w-4 shrink-0" />
                       {!collapsed && <span>{item.title}</span>}
@@ -106,13 +108,24 @@ export function AppSidebar({ onLogout }: AppSidebarProps) {
       <SidebarFooter className="border-t border-border p-2">
         <SidebarMenu>
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={toggleTheme} className="hover:bg-accent/50 text-muted-foreground hover:text-foreground transition-colors">
+            <SidebarMenuButton
+              onClick={toggleTheme}
+              className="hover:bg-accent/50 text-muted-foreground hover:text-foreground transition-colors"
+              tooltip={themeLabel}
+              aria-label="Toggle theme"
+            >
               {themeIcon}
               {!collapsed && <span>{themeLabel}</span>}
             </SidebarMenuButton>
           </SidebarMenuItem>
+
           <SidebarMenuItem>
-            <SidebarMenuButton onClick={onLogout} className="hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors">
+            <SidebarMenuButton
+              onClick={onLogout}
+              className="hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+              tooltip="Logout"
+              aria-label="Logout"
+            >
               <LogOut className="mr-2 h-4 w-4 shrink-0" />
               {!collapsed && <span>Logout</span>}
             </SidebarMenuButton>
